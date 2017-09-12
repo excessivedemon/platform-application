@@ -1,0 +1,48 @@
+- hosts: localhost
+  vars:
+    ansible_python_interpreter: "/usr/bin/env python"
+
+  tasks:
+
+    - set_fact:
+        artifact_bucket_key: "{{ lookup('env', 'ARTIFACT_BUCKET_KEY') }}"
+        artifact_bucket: "{{ lookup('env', 'ARTIFACT_BUCKET') }}"
+        codebuild_src_dir: "{{ lookup('env', 'CODEBUILD_SRC_DIR') }}"
+        lambda_function_name: "{{ lookup('env', 'LAMBDA_FUNCTION_NAME') }}"
+        lambda_execution_role: "{{ lookup('env', 'LAMBDA_EXECUTION_ROLE') }}"
+        lambda_function_alias: "{{ lookup('env', 'LAMBDA_FUNCTION_ALIAS') }}"
+        source_hash: "{{ lookup('env', 'CODEBUILD_RESOLVED_SOURCE_VERSION') }}"
+        github_repo_url: "{{ lookup('env', 'GITHUB_REPO_URL') }}"
+        api_invoke_url: "{{ lookup('env', 'API_INVOKE_URL') }}"
+
+    - shell: wget -O - 169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI | python -mjson.tool
+      register: credentials
+
+    - set_fact:
+        source_zip: "{{ lookup('env', 'HOME') }}/{{ artifact_bucket_key }}"
+        aws_credentials:
+          AWS_ACCESS_KEY_ID: "{{ (credentials.stdout|from_json)['AccessKeyId'] }}"
+          AWS_SECRET_ACCESS_KEY: "{{ (credentials.stdout|from_json)['SecretAccessKey'] }}"
+          AWS_SECURITY_TOKEN: "{{ (credentials.stdout|from_json)['Token'] }}"
+
+    - shell: pip install -r {{ codebuild_src_dir }}/requirements.txt --target {{ codebuild_src_dir }}
+
+    - shell: echo {{ source_hash }} > {{ codebuild_src_dir }}/source_hash
+
+    - shell: git ls-remote --tags {{ github_repo_url }} | grep {{ source_hash }} | cut -d'/' -f3 | cut -d'^' -f1 > {{ codebuild_src_dir }}/version
+
+    - shell: echo {{ api_invoke_url }}/root > {{ codebuild_src_dir }}/health
+
+    - archive:
+        format: zip
+        path:
+          - "{{ codebuild_src_dir }}/*"
+        dest: "{{ source_zip }}"
+
+    - shell: aws lambda update-function-code --function-name {{ lambda_function_name }} --zip-file fileb://{{ source_zip }} --publish --output json | python -mjson.tool
+      register: update
+
+    - set_fact:
+        version: "{{ (update.stdout|from_json)['Version'] }}"
+
+    - shell: aws lambda update-alias --function-name {{ lambda_function_name }} --name {{ lambda_function_alias }} --function-version {{ version }}

@@ -1,0 +1,12 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - pip install ansible
+  build:
+    commands:
+      - ansible-playbook $CODEBUILD_SRC_DIR/build/deploy.yaml
+#  post_build:
+#    commands:
+#      - aws --version
